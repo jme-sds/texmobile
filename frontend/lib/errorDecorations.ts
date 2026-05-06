@@ -72,6 +72,18 @@ export const suggestionField = StateField.define<SuggestionDecorState>({
     let { ranges, decorations } = state
     decorations = decorations.map(tr.changes)
 
+    if (tr.docChanged && ranges.size > 0) {
+      const newRanges = new Map<string, SuggestionRange[]>()
+      for (const [id, rs] of ranges) {
+        newRanges.set(id, rs.map(r => ({
+          ...r,
+          from: tr.changes.mapPos(r.from),
+          to: tr.changes.mapPos(r.to),
+        })))
+      }
+      ranges = newRanges
+    }
+
     for (const effect of tr.effects) {
       if (effect.is(clearAllSuggestionsEffect)) {
         return { ranges: new Map(), decorations: Decoration.none }

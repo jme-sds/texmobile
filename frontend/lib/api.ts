@@ -30,6 +30,13 @@ export const createProject = (name: string) =>
 export const deleteProject = (name: string) =>
   req<{ deleted: string }>(`/api/files/projects/${enc(name)}`, { method: 'DELETE' })
 
+export const duplicateProject = (source: string, newName: string) =>
+  req<{ project: string }>(`/api/files/projects/${enc(source)}/duplicate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ new_name: newName }),
+  })
+
 // ── Files ────────────────────────────────────────────────────────────────────
 
 export const listFiles = (project: string) =>

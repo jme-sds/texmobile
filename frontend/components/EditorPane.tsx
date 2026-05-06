@@ -84,7 +84,7 @@ const SNIPPETS: { label: string; text: string }[] = [
 ]
 
 // Set to true to re-enable the writing assistant toolbar button and panel.
-const WRITING_ASSISTANT_ENABLED = false
+const WRITING_ASSISTANT_ENABLED = true
 
 const CURSOR_POSITIONS_KEY = 'texmobile:cursorPositions'
 

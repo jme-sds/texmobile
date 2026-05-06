@@ -36,6 +36,18 @@ export const commentField = StateField.define<CommentDecorState>({
     let { ranges, decorations } = state
     decorations = decorations.map(tr.changes)
 
+    if (tr.docChanged && ranges.size > 0) {
+      const newRanges = new Map<string, CommentRange>()
+      for (const [id, r] of ranges) {
+        newRanges.set(id, {
+          ...r,
+          from: tr.changes.mapPos(r.from),
+          to: tr.changes.mapPos(r.to),
+        })
+      }
+      ranges = newRanges
+    }
+
     for (const effect of tr.effects) {
       if (effect.is(clearAllCommentsEffect)) {
         return { ranges: new Map(), decorations: Decoration.none }

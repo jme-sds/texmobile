@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import {
   FolderOpen, Folder, FilePlus2, FolderPlus, Trash2, Upload,
   ChevronRight, ChevronLeft, ChevronDown, FileText, ImageIcon, FileIcon,
-  Loader2, RefreshCw, AlertCircle, FileArchive,
+  Loader2, RefreshCw, AlertCircle, FileArchive, CopyPlus,
 } from 'lucide-react'
 import { useApp } from '@/lib/AppContext'
 import * as api from '@/lib/api'
@@ -90,6 +90,7 @@ export default function FilesPane() {
   const [newProjectName, setNewProjectName] = useState<string | null>(null)
   const [newFileName, setNewFileName] = useState<string | null>(null)
   const [newFolderName, setNewFolderName] = useState<string | null>(null)
+  const [duplicateProjectName, setDuplicateProjectName] = useState<string | null>(null)
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
 
@@ -100,10 +101,12 @@ export default function FilesPane() {
   const newProjectInputRef = useRef<HTMLInputElement>(null)
   const newFileInputRef = useRef<HTMLInputElement>(null)
   const newFolderInputRef = useRef<HTMLInputElement>(null)
+  const duplicateProjectInputRef = useRef<HTMLInputElement>(null)
   // Prevents double-fire from (Enter → blur) sequences.
   const creatingProjectRef = useRef(false)
   const creatingFileRef = useRef(false)
   const creatingFolderRef = useRef(false)
+  const duplicatingProjectRef = useRef(false)
 
   // ── Data loading ───────────────────────────────────────────────────────────
 
@@ -155,6 +158,9 @@ export default function FilesPane() {
   useEffect(() => {
     if (newFolderName !== null) newFolderInputRef.current?.focus()
   }, [newFolderName])
+  useEffect(() => {
+    if (duplicateProjectName !== null) duplicateProjectInputRef.current?.focus()
+  }, [duplicateProjectName])
 
   // ── Project actions ────────────────────────────────────────────────────────
 
@@ -207,6 +213,26 @@ export default function FilesPane() {
       setError(String(e))
     }
   }, [expandedProject, currentProject, loadProjects, setCurrentProject, setCurrentFile, setEditorContent])
+
+  const handleDuplicateProject = useCallback(async (newName: string) => {
+    if (!newName.trim() || !expandedProject || duplicatingProjectRef.current) {
+      setDuplicateProjectName(null)
+      return
+    }
+    duplicatingProjectRef.current = true
+    try {
+      await api.duplicateProject(expandedProject, newName.trim())
+      setDuplicateProjectName(null)
+      await loadProjects()
+      setExpandedProject(newName.trim())
+      setCurrentProject(newName.trim())
+      await loadFiles(newName.trim(), true)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      duplicatingProjectRef.current = false
+    }
+  }, [expandedProject, loadProjects, loadFiles, setCurrentProject])
 
   // ── File actions ───────────────────────────────────────────────────────────
 
@@ -648,6 +674,16 @@ export default function FilesPane() {
                       >
                         <Upload size={12} /> Upload
                       </button>
+                      <button
+                        onClick={() => {
+                          setNewFileName(null)
+                          setNewFolderName(null)
+                          setDuplicateProjectName(`Copy of ${expandedProject ?? ''}`)
+                        }}
+                        className="flex items-center gap-1 text-[11px] text-slate-500 hover:text-indigo-300 transition-colors"
+                      >
+                        <CopyPlus size={12} /> Duplicate
+                      </button>
                       <input
                         ref={uploadRef}
                         type="file"
@@ -678,6 +714,18 @@ export default function FilesPane() {
                         onChange={setNewFolderName}
                         onSubmit={handleCreateFolder}
                         onCancel={() => setNewFolderName(null)}
+                      />
+                    )}
+
+                    {/* Duplicate-project inline input */}
+                    {duplicateProjectName !== null && (
+                      <InlineInput
+                        inputRef={duplicateProjectInputRef}
+                        value={duplicateProjectName}
+                        placeholder="New project name"
+                        onChange={setDuplicateProjectName}
+                        onSubmit={handleDuplicateProject}
+                        onCancel={() => setDuplicateProjectName(null)}
                       />
                     )}
 

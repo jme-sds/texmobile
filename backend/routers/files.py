@@ -65,6 +65,25 @@ async def delete_project(project: str):
     return {"deleted": project}
 
 
+class ProjectDuplicate(BaseModel):
+    new_name: str
+
+
+@router.post("/projects/{project}/duplicate")
+async def duplicate_project(project: str, body: ProjectDuplicate):
+    source = _safe_path(project)
+    if not source.exists():
+        raise HTTPException(status_code=404, detail="Project not found")
+    new_name = body.new_name.strip()
+    if not new_name:
+        raise HTTPException(status_code=422, detail="new_name must not be empty")
+    destination = _safe_path(new_name)
+    if destination.exists():
+        raise HTTPException(status_code=409, detail=f'A project named "{new_name}" already exists')
+    shutil.copytree(str(source), str(destination))
+    return {"project": new_name}
+
+
 # ── Files within a project ───────────────────────────────────────────────────
 
 @router.get("/projects/{project}/files")
