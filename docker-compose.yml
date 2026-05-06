@@ -1,0 +1,39 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: texmobile-backend
+    restart: unless-stopped
+    volumes:
+      # User projects only — code lives inside the image built by the Dockerfile.
+      - ./projects:/app/projects
+    environment:
+      - PROJECTS_DIR=/app/projects
+      - PYTHONUNBUFFERED=1
+        #    ports:
+        #      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Passed to next build so the rewrite destination is baked into the
+        # standalone bundle.  Uses the Docker Compose service name as the host.
+        - API_URL=http://backend:8000
+    container_name: texmobile-frontend
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+    ports:
+      - "4444:3000"
+    depends_on:
+      backend:
+        condition: service_healthy

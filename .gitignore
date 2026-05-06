@@ -1,0 +1,29 @@
+# User project data (not part of the build)
+projects/
+
+# Environment secrets (keep .env.example)
+.env
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Node artifacts
+node_modules/
+.next/
+out/
+dist/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Dev tooling
+.claude/

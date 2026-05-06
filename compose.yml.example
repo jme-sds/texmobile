@@ -1,0 +1,58 @@
+# compose.yml.example — run texmobile from pre-built container images.
+#
+# 1. Copy this file to compose.yml:
+#      cp compose.yml.example compose.yml
+#
+# 2. Replace OWNER/REPO in the image names below with your GitHub owner and
+#    repository name (e.g. ghcr.io/jsmith/texmobile-backend:latest).
+#    Images are published to ghcr.io on every push to main (:latest) and on
+#    every version tag (:1.2.3, :1.2).  Pin to a specific tag for stable
+#    deployments; use :latest to track the main branch.
+#
+# 3. Create the projects directory on the host:
+#      mkdir -p projects
+#
+# 4. Make the packages public on ghcr.io (Package Settings → Visibility),
+#    or authenticate with: docker login ghcr.io -u YOUR_GITHUB_USERNAME
+#
+# 5. Start the stack:
+#      docker compose up -d
+
+services:
+  backend:
+    image: ghcr.io/OWNER/REPO-backend:latest
+    container_name: texmobile-backend
+    restart: unless-stopped
+    volumes:
+      # Host directory where LaTeX projects are stored.  Change the left-hand
+      # side to any path on the host; right-hand side must stay /app/projects.
+      - ./projects:/app/projects
+    environment:
+      - PROJECTS_DIR=/app/projects
+      - PYTHONUNBUFFERED=1
+    # Optional: load variables from a .env file instead of listing them above.
+    # Copy .env.example to .env, adjust as needed, then uncomment:
+    # env_file: .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+
+  frontend:
+    image: ghcr.io/OWNER/REPO-frontend:latest
+    container_name: texmobile-frontend
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      # API_URL is baked into the image at build time (http://backend:8000).
+      # This matches the backend service name above, so no change is needed
+      # for the standard single-host setup.
+    ports:
+      # Host port 4444 → container port 3000.  Change the left side to use a
+      # different host port (e.g. "80:3000" to serve on port 80).
+      - "4444:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
