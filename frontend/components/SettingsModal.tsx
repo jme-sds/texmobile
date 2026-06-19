@@ -19,6 +19,7 @@ export default function SettingsModal({ onClose }: Props) {
   const [model, setModel] = useState('')
   const [keyIsSet, setKeyIsSet] = useState(false)
   const [defaultCompiler, setDefaultCompiler] = useState<string>('pdflatex')
+  const [demoMode, setDemoMode] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -32,6 +33,7 @@ export default function SettingsModal({ onClose }: Props) {
       setModel(cfg.model_name)
       setKeyIsSet(cfg.api_key_set)
       setDefaultCompiler(cfg.default_compiler || 'pdflatex')
+      setDemoMode(cfg.demo_mode ?? false)
     }).catch(() => {
       setError('Could not load settings.')
     }).finally(() => setLoading(false))
@@ -103,28 +105,42 @@ export default function SettingsModal({ onClose }: Props) {
           ) : (
             <>
               <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">AI / LLM</p>
-              <Field
-                label="API Endpoint"
-                hint='Full base URL including version path, e.g. https://api.openai.com/v1'
-                value={endpoint}
-                onChange={v => { setEndpoint(v); setTestState('idle') }}
-                placeholder="https://api.openai.com/v1"
-              />
-              <Field
-                label="API Key"
-                hint={keyIsSet ? 'A key is already saved — leave blank to keep it' : 'Enter your API key'}
-                value={apiKey}
-                onChange={v => { setApiKey(v); setTestState('idle') }}
-                placeholder={keyIsSet ? '••••••••' : 'sk-...'}
-                type="password"
-              />
-              <Field
-                label="Model Name"
-                hint="e.g. gpt-4o, gpt-3.5-turbo"
-                value={model}
-                onChange={v => { setModel(v); setTestState('idle') }}
-                placeholder="gpt-4o"
-              />
+
+              {demoMode ? (
+                <div className="space-y-3">
+                  <p className="text-xs text-amber-400 bg-amber-900/20 rounded px-3 py-2 border border-amber-900/40">
+                    Running in demo mode — LLM settings are configured server-side and cannot be changed here.
+                  </p>
+                  <ReadOnlyField label="API Endpoint" value={endpoint || '—'} />
+                  <ReadOnlyField label="Model" value={model || '—'} />
+                  <ReadOnlyField label="API Key" value={keyIsSet ? '••••••••  (configured)' : 'Not set'} />
+                </div>
+              ) : (
+                <>
+                  <Field
+                    label="API Endpoint"
+                    hint='Full base URL including version path, e.g. https://api.openai.com/v1'
+                    value={endpoint}
+                    onChange={v => { setEndpoint(v); setTestState('idle') }}
+                    placeholder="https://api.openai.com/v1"
+                  />
+                  <Field
+                    label="API Key"
+                    hint={keyIsSet ? 'A key is already saved — leave blank to keep it' : 'Enter your API key'}
+                    value={apiKey}
+                    onChange={v => { setApiKey(v); setTestState('idle') }}
+                    placeholder={keyIsSet ? '••••••••' : 'sk-...'}
+                    type="password"
+                  />
+                  <Field
+                    label="Model Name"
+                    hint="e.g. gpt-4o, gpt-3.5-turbo"
+                    value={model}
+                    onChange={v => { setModel(v); setTestState('idle') }}
+                    placeholder="gpt-4o"
+                  />
+                </>
+              )}
 
               <hr className="border-surface-700" />
 
@@ -165,7 +181,7 @@ export default function SettingsModal({ onClose }: Props) {
           <button
             onClick={handleTest}
             disabled={busy || testState === 'testing'}
-            title="Save first, then test the connection to your LLM provider"
+            title="Test the connection to your LLM provider"
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors
               ${busy || testState === 'testing'
                 ? 'text-slate-600 cursor-not-allowed'
@@ -188,22 +204,35 @@ export default function SettingsModal({ onClose }: Props) {
               className="px-3 py-1.5 rounded text-xs text-slate-400 hover:text-slate-200
                 hover:bg-surface-600 transition-colors"
             >
-              Cancel
+              {demoMode ? 'Close' : 'Cancel'}
             </button>
-            <button
-              onClick={handleSave}
-              disabled={busy}
-              className={`flex items-center gap-1.5 px-4 py-1.5 rounded text-xs font-semibold transition-colors
-                ${busy
-                  ? 'bg-surface-700 text-slate-500 cursor-not-allowed'
-                  : 'bg-indigo-600 hover:bg-indigo-500 text-white'}`}
-            >
-              {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
-              Save
-            </button>
+            {!demoMode && (
+              <button
+                onClick={handleSave}
+                disabled={busy}
+                className={`flex items-center gap-1.5 px-4 py-1.5 rounded text-xs font-semibold transition-colors
+                  ${busy
+                    ? 'bg-surface-700 text-slate-500 cursor-not-allowed'
+                    : 'bg-indigo-600 hover:bg-indigo-500 text-white'}`}
+              >
+                {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+                Save
+              </button>
+            )}
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+function ReadOnlyField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="space-y-1.5">
+      <label className="block text-xs font-medium text-slate-300">{label}</label>
+      <p className="w-full bg-surface-700/50 text-slate-400 text-xs rounded px-3 py-2 border border-surface-600">
+        {value}
+      </p>
     </div>
   )
 }

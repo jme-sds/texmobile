@@ -3,11 +3,12 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, field_validator
 
-from ._utils import PROJECTS_DIR, _safe_path
+from ._utils import _safe_path, get_user_projects_dir
+from ..auth import AuthUser, get_current_user
 
 router = APIRouter()
 
@@ -70,7 +71,6 @@ def _parse_log(log_text: str) -> list[CompileError]:
         if line.startswith("!"):
             message = line[1:].strip()
             lineno: int | None = None
-            # Scan forward for the 'l.<n>' line number hint.
             for j in range(i + 1, min(i + 6, len(lines))):
                 if lines[j].startswith("l."):
                     try:
@@ -84,23 +84,20 @@ def _parse_log(log_text: str) -> list[CompileError]:
 
 
 @router.post("")
-async def compile_project(req: CompileRequest):
+async def compile_project(req: CompileRequest, current_user: AuthUser = Depends(get_current_user)):
     """Compile a LaTeX project and return the PDF, or structured errors."""
-    project_dir = _safe_path(req.project)
+    user_dir = get_user_projects_dir(current_user.id)
+    project_dir = _safe_path(user_dir, req.project)
     if not project_dir.exists():
         raise HTTPException(status_code=404, detail="Project not found")
 
-    entry = _safe_path(req.project, req.filename)
+    entry = _safe_path(user_dir, req.project, req.filename)
     if not entry.exists():
         raise HTTPException(status_code=404, detail="Entry file not found")
 
-    # Run latexmk inside a temp working directory so auxiliary files don't
-    # pollute the project.  The source files are read from project_dir.
     with tempfile.TemporaryDirectory(prefix="texmobile_") as tmpdir:
         tmp_path = Path(tmpdir)
 
-        # Copy project files into the temp dir so \input / \includegraphics
-        # can resolve relative paths correctly.
         shutil.copytree(str(project_dir), str(tmp_path / "src"))
         src_dir = tmp_path / "src"
 
@@ -118,7 +115,6 @@ async def compile_project(req: CompileRequest):
         pdf_path = tmp_path / f"{pdf_stem}.pdf"
         log_path = tmp_path / f"{pdf_stem}.log"
 
-        # For the latex engine: convert the intermediate DVI to PDF.
         if req.compiler == "latex" and proc.returncode == 0:
             dvi_path = tmp_path / f"{pdf_stem}.dvi"
             if dvi_path.exists():
@@ -141,7 +137,6 @@ async def compile_project(req: CompileRequest):
                 errors = [CompileError(line=None, message=stderr or "Unknown compilation error")]
             return CompileErrorResponse(errors=errors, log=log_text)
 
-        # Move PDF to a stable location before the tempdir is deleted.
         output_pdf = project_dir / f"{pdf_stem}.pdf"
         shutil.copy2(str(pdf_path), str(output_pdf))
 
@@ -152,10 +147,6 @@ async def compile_project(req: CompileRequest):
     )
 
 
-# ---------------------------------------------------------------------------
-# Dummy route — lets the frontend verify the endpoint is reachable without
-# triggering a real compilation.
-# ---------------------------------------------------------------------------
 @router.get("/ping")
 async def compile_ping():
     return {"message": "compile endpoint ready"}

@@ -4,9 +4,12 @@ import { useEffect, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { AppProvider, useApp, type Pane } from '@/lib/AppContext'
 import * as api from '@/lib/api'
-import { FolderOpen, FileText, BookOpen, Loader2, Save, Menu, Settings, RefreshCw, SlidersHorizontal } from 'lucide-react'
+import { AuthStore } from '@/lib/auth'
+import type { UserInfo } from '@/lib/api'
+import { FolderOpen, FileText, BookOpen, Loader2, Save, Menu, Settings, RefreshCw, SlidersHorizontal, LogOut } from 'lucide-react'
 import SettingsModal from './SettingsModal'
 import ProjectSettingsModal from './ProjectSettingsModal'
+import LoginScreen from './LoginScreen'
 import type { LatexCompiler } from '@/lib/types'
 
 const AUTO_COMPILE_KEY = 'texmobile:autoCompile'
@@ -26,7 +29,13 @@ const EditorPane = dynamic(() => import('./EditorPane'), { ssr: false })
 const PdfPane    = dynamic(() => import('./PdfPane'),    { ssr: false })
 const FilesPane  = dynamic(() => import('./FilesPane'),  { ssr: false })
 
-function ShellInner() {
+interface ShellInnerProps {
+  multiUserMode: boolean
+  currentUser: UserInfo | null
+  onLogout: () => void
+}
+
+function ShellInner({ multiUserMode, currentUser, onLogout }: ShellInnerProps) {
   const {
     activePane, setActivePane,
     setCurrentProject, setCurrentFile,
@@ -56,17 +65,16 @@ function ShellInner() {
         setCurrentFile(file)
         setEditorContent(content)
         setSavedContent(content)
-        // Load compiler setting for the restored project.
         api.getProjectConfig(project).then(cfg => {
           setProjectCompiler((cfg.compiler || 'pdflatex') as LatexCompiler)
         }).catch(() => { /* non-fatal */ })
-        // Auto-load matching PDF if one was already compiled.
         if (file.endsWith('.tex')) {
           const pdfName = file.split('/').pop()!.replace(/\.tex$/, '.pdf')
           try {
             const files = await api.listFiles(project)
             if (files.some(f => f.type === 'file' && f.path === pdfName)) {
-              setPdfUrl(api.getRawFileUrl(project, pdfName))
+              const blob = await api.fetchRawFile(project, pdfName)
+              setPdfUrl(URL.createObjectURL(blob))
             }
           } catch { /* non-fatal */ }
         }
@@ -77,7 +85,7 @@ function ShellInner() {
 
   return (
     <div className="flex flex-col h-dvh bg-surface-900">
-      <TopBar />
+      <TopBar multiUserMode={multiUserMode} currentUser={currentUser} onLogout={onLogout} />
 
       {/* Mobile: single active pane */}
       <div className="flex-1 overflow-hidden md:hidden">
@@ -103,7 +111,13 @@ function ShellInner() {
 
 // ── Top bar ────────────────────────────────────────────────────────────────
 
-function HamburgerMenu() {
+interface HamburgerMenuProps {
+  multiUserMode: boolean
+  currentUser: UserInfo | null
+  onLogout: () => void
+}
+
+function HamburgerMenu({ multiUserMode, currentUser, onLogout }: HamburgerMenuProps) {
   const [open, setOpen] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
 
@@ -122,7 +136,7 @@ function HamburgerMenu() {
           <>
             <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
             <div className="absolute left-0 top-full mt-1 z-50 bg-surface-800 border border-surface-600
-              rounded-lg shadow-xl py-1 min-w-[140px]">
+              rounded-lg shadow-xl py-1 min-w-[160px]">
               <button
                 onClick={() => { setOpen(false); setShowSettings(true) }}
                 className="flex items-center gap-2.5 w-full px-3 py-2 text-xs text-slate-300
@@ -131,6 +145,26 @@ function HamburgerMenu() {
                 <Settings size={13} className="text-slate-500" />
                 Settings
               </button>
+
+              {multiUserMode && currentUser && (
+                <>
+                  <div className="mx-3 my-1 border-t border-surface-600" />
+                  <div className="px-3 py-1.5">
+                    <p className="text-[10px] text-slate-600 truncate">{currentUser.email}</p>
+                    {currentUser.is_demo && (
+                      <p className="text-[10px] text-amber-600">Demo account</p>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => { setOpen(false); onLogout() }}
+                    className="flex items-center gap-2.5 w-full px-3 py-2 text-xs text-slate-300
+                      hover:bg-surface-600 hover:text-slate-100 transition-colors"
+                  >
+                    <LogOut size={13} className="text-slate-500" />
+                    Sign out
+                  </button>
+                </>
+              )}
             </div>
           </>
         )}
@@ -163,7 +197,13 @@ function ProjectSettingsButton() {
   )
 }
 
-function TopBar() {
+interface TopBarProps {
+  multiUserMode: boolean
+  currentUser: UserInfo | null
+  onLogout: () => void
+}
+
+function TopBar({ multiUserMode, currentUser, onLogout }: TopBarProps) {
   const { currentProject, currentFile } = useApp()
 
   return (
@@ -171,7 +211,7 @@ function TopBar() {
       bg-surface-800 border-b border-surface-700 shrink-0 select-none"
     >
       <div className="flex items-center gap-2 shrink-0">
-        <HamburgerMenu />
+        <HamburgerMenu multiUserMode={multiUserMode} currentUser={currentUser} onLogout={onLogout} />
         <span className="font-mono font-bold text-sm tracking-widest">
           <span className="text-indigo-400">TEX</span>
           <span className="text-slate-300">MOBILE</span>
@@ -430,12 +470,78 @@ function BottomNav({
   )
 }
 
-// ── Root export (wraps with provider) ─────────────────────────────────────
+// ── Root export: auth gate + provider ─────────────────────────────────────
+
+type AuthStatus = 'loading' | 'login' | 'authenticated'
 
 export default function Shell() {
+  const [authStatus, setAuthStatus] = useState<AuthStatus>('loading')
+  const [multiUserMode, setMultiUserMode] = useState(false)
+  const [currentUser, setCurrentUser] = useState<UserInfo | null>(null)
+
+  useEffect(() => {
+    api.getInfo().then(info => {
+      setMultiUserMode(info.multi_user_mode)
+      if (!info.multi_user_mode) {
+        setAuthStatus('authenticated')
+        return
+      }
+      const token = AuthStore.getToken()
+      if (!token) {
+        setAuthStatus('login')
+        return
+      }
+      api.getMe().then(user => {
+        setCurrentUser(user)
+        setAuthStatus('authenticated')
+      }).catch(() => {
+        AuthStore.clearToken()
+        setAuthStatus('login')
+      })
+    }).catch(() => {
+      // If /api/info fails, fall back to single-user (unauthenticated access).
+      setAuthStatus('authenticated')
+    })
+
+    const handleUnauthorized = () => {
+      AuthStore.clearToken()
+      setCurrentUser(null)
+      setAuthStatus('login')
+    }
+    window.addEventListener('texmobile:unauthorized', handleUnauthorized)
+    return () => window.removeEventListener('texmobile:unauthorized', handleUnauthorized)
+  }, [])
+
+  const handleLogin = (user: UserInfo, _token: string) => {
+    setCurrentUser(user)
+    setAuthStatus('authenticated')
+  }
+
+  const handleLogout = () => {
+    AuthStore.clearToken()
+    setCurrentUser(null)
+    setAuthStatus('login')
+  }
+
+  if (authStatus === 'loading') {
+    return (
+      <div className="min-h-dvh bg-surface-900 flex items-center justify-center">
+        <Loader2 size={24} className="animate-spin text-slate-600" />
+      </div>
+    )
+  }
+
+  if (authStatus === 'login') {
+    return <LoginScreen onLogin={handleLogin} />
+  }
+
   return (
     <AppProvider>
-      <ShellInner />
+      <ShellInner
+        multiUserMode={multiUserMode}
+        currentUser={currentUser}
+        onLogout={handleLogout}
+      />
     </AppProvider>
   )
 }

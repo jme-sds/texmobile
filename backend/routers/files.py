@@ -1,6 +1,7 @@
 """File & project management routes.
 
-All paths are relative to PROJECTS_DIR and are validated to prevent traversal.
+All paths are relative to the user's projects directory and are validated
+to prevent traversal.
 """
 
 import io
@@ -12,11 +13,12 @@ from pathlib import Path
 from typing import Annotated
 
 import aiofiles
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from ._utils import PROJECTS_DIR, _safe_path
+from ._utils import _safe_path, get_user_projects_dir
+from ..auth import AuthUser, get_current_user
 
 router = APIRouter()
 
@@ -24,10 +26,11 @@ router = APIRouter()
 # ── Projects ────────────────────────────────────────────────────────────────
 
 @router.get("/projects")
-async def list_projects():
-    PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+async def list_projects(current_user: AuthUser = Depends(get_current_user)):
+    user_dir = get_user_projects_dir(current_user.id)
+    user_dir.mkdir(parents=True, exist_ok=True)
     return [
-        d.name for d in sorted(PROJECTS_DIR.iterdir())
+        d.name for d in sorted(user_dir.iterdir())
         if d.is_dir() and not d.name.startswith(".")
     ]
 
@@ -37,12 +40,12 @@ class ProjectCreate(BaseModel):
 
 
 @router.post("/projects")
-async def create_project(body: ProjectCreate):
-    target = _safe_path(body.name)
+async def create_project(body: ProjectCreate, current_user: AuthUser = Depends(get_current_user)):
+    user_dir = get_user_projects_dir(current_user.id)
+    target = _safe_path(user_dir, body.name)
     if target.exists():
         raise HTTPException(status_code=409, detail="Project already exists")
     target.mkdir(parents=True)
-    # Seed with a minimal main.tex so the user can compile immediately.
     (target / "main.tex").write_text(
         r"""\documentclass{article}
 \begin{document}
@@ -57,8 +60,9 @@ Hello from Texmobile!
 
 
 @router.delete("/projects/{project}")
-async def delete_project(project: str):
-    target = _safe_path(project)
+async def delete_project(project: str, current_user: AuthUser = Depends(get_current_user)):
+    user_dir = get_user_projects_dir(current_user.id)
+    target = _safe_path(user_dir, project)
     if not target.exists():
         raise HTTPException(status_code=404, detail="Project not found")
     shutil.rmtree(str(target))
@@ -68,8 +72,9 @@ async def delete_project(project: str):
 # ── Files within a project ───────────────────────────────────────────────────
 
 @router.get("/projects/{project}/files")
-async def list_files(project: str):
-    project_dir = _safe_path(project)
+async def list_files(project: str, current_user: AuthUser = Depends(get_current_user)):
+    user_dir = get_user_projects_dir(current_user.id)
+    project_dir = _safe_path(user_dir, project)
     if not project_dir.exists():
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -95,8 +100,9 @@ class FileCreate(BaseModel):
 
 
 @router.post("/projects/{project}/files")
-async def create_file(project: str, body: FileCreate):
-    target = _safe_path(project, body.name)
+async def create_file(project: str, body: FileCreate, current_user: AuthUser = Depends(get_current_user)):
+    user_dir = get_user_projects_dir(current_user.id)
+    target = _safe_path(user_dir, project, body.name)
     if target.exists():
         raise HTTPException(status_code=409, detail="File already exists")
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -109,8 +115,9 @@ class DirectoryCreate(BaseModel):
 
 
 @router.post("/projects/{project}/directories")
-async def create_directory(project: str, body: DirectoryCreate):
-    target = _safe_path(project, body.name)
+async def create_directory(project: str, body: DirectoryCreate, current_user: AuthUser = Depends(get_current_user)):
+    user_dir = get_user_projects_dir(current_user.id)
+    target = _safe_path(user_dir, project, body.name)
     if target.exists():
         raise HTTPException(status_code=409, detail="Directory already exists")
     target.mkdir(parents=True)
@@ -118,8 +125,9 @@ async def create_directory(project: str, body: DirectoryCreate):
 
 
 @router.get("/projects/{project}/files/{filename:path}")
-async def read_file(project: str, filename: str):
-    target = _safe_path(project, filename)
+async def read_file(project: str, filename: str, current_user: AuthUser = Depends(get_current_user)):
+    user_dir = get_user_projects_dir(current_user.id)
+    target = _safe_path(user_dir, project, filename)
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     content = target.read_text(encoding="utf-8", errors="replace")
@@ -127,9 +135,10 @@ async def read_file(project: str, filename: str):
 
 
 @router.get("/projects/{project}/raw/{filename:path}")
-async def serve_raw_file(project: str, filename: str):
+async def serve_raw_file(project: str, filename: str, current_user: AuthUser = Depends(get_current_user)):
     """Serve a file as raw bytes with the correct content-type (e.g. for PDF viewing)."""
-    target = _safe_path(project, filename)
+    user_dir = get_user_projects_dir(current_user.id)
+    target = _safe_path(user_dir, project, filename)
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     mime, _ = mimetypes.guess_type(str(target))
@@ -141,8 +150,9 @@ class FileUpdate(BaseModel):
 
 
 @router.put("/projects/{project}/files/{filename:path}")
-async def update_file(project: str, filename: str, body: FileUpdate):
-    target = _safe_path(project, filename)
+async def update_file(project: str, filename: str, body: FileUpdate, current_user: AuthUser = Depends(get_current_user)):
+    user_dir = get_user_projects_dir(current_user.id)
+    target = _safe_path(user_dir, project, filename)
     if not target.exists():
         raise HTTPException(status_code=404, detail="File not found")
     target.write_text(body.content, encoding="utf-8")
@@ -150,8 +160,9 @@ async def update_file(project: str, filename: str, body: FileUpdate):
 
 
 @router.delete("/projects/{project}/files/{filename:path}")
-async def delete_file(project: str, filename: str):
-    target = _safe_path(project, filename)
+async def delete_file(project: str, filename: str, current_user: AuthUser = Depends(get_current_user)):
+    user_dir = get_user_projects_dir(current_user.id)
+    target = _safe_path(user_dir, project, filename)
     if not target.exists():
         raise HTTPException(status_code=404, detail="File not found")
     if target.is_dir():
@@ -165,7 +176,9 @@ async def delete_file(project: str, filename: str):
 async def upload_zip(
     file: Annotated[UploadFile, File()],
     overwrite: bool = Query(False),
+    current_user: AuthUser = Depends(get_current_user),
 ):
+    user_dir = get_user_projects_dir(current_user.id)
     data = await file.read()
     try:
         zf = zipfile.ZipFile(io.BytesIO(data))
@@ -180,7 +193,7 @@ async def upload_zip(
     zip_stem = Path(file.filename or "project").stem
     project_name = root_dir if single_root else zip_stem
 
-    project_dir = _safe_path(project_name)
+    project_dir = _safe_path(user_dir, project_name)
     if project_dir.exists() and not overwrite:
         raise HTTPException(status_code=409, detail="Project already exists")
     project_dir.mkdir(parents=True, exist_ok=True)
@@ -195,7 +208,7 @@ async def upload_zip(
         rel = list(parts[1:] if (single_root and parts[0] == root_dir) else parts)
         if not rel:
             continue
-        target = _safe_path(project_name, *rel)
+        target = _safe_path(user_dir, project_name, *rel)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(zf.read(info.filename))
         extracted += 1
@@ -208,8 +221,9 @@ class ProjectConfig(BaseModel):
 
 
 @router.get("/projects/{project}/config")
-async def get_project_config(project: str):
-    project_dir = _safe_path(project)
+async def get_project_config(project: str, current_user: AuthUser = Depends(get_current_user)):
+    user_dir = get_user_projects_dir(current_user.id)
+    project_dir = _safe_path(user_dir, project)
     if not project_dir.exists():
         raise HTTPException(status_code=404, detail="Project not found")
     config_path = project_dir / ".texmobile.json"
@@ -222,8 +236,9 @@ async def get_project_config(project: str):
 
 
 @router.post("/projects/{project}/config")
-async def save_project_config(project: str, body: ProjectConfig):
-    project_dir = _safe_path(project)
+async def save_project_config(project: str, body: ProjectConfig, current_user: AuthUser = Depends(get_current_user)):
+    user_dir = get_user_projects_dir(current_user.id)
+    project_dir = _safe_path(user_dir, project)
     if not project_dir.exists():
         raise HTTPException(status_code=404, detail="Project not found")
     config_path = project_dir / ".texmobile.json"
@@ -236,9 +251,11 @@ async def upload_file(
     project: str,
     file: Annotated[UploadFile, File()],
     subpath: Annotated[str, Form()] = "",
+    current_user: AuthUser = Depends(get_current_user),
 ):
+    user_dir = get_user_projects_dir(current_user.id)
     filename = file.filename or "upload"
-    target = _safe_path(project, subpath, filename) if subpath else _safe_path(project, filename)
+    target = _safe_path(user_dir, project, subpath, filename) if subpath else _safe_path(user_dir, project, filename)
     target.parent.mkdir(parents=True, exist_ok=True)
     async with aiofiles.open(str(target), "wb") as f:
         while chunk := await file.read(1024 * 256):

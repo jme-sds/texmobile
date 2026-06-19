@@ -279,7 +279,9 @@ export default function FilesPane() {
         const pdfName = file.path.split('/').pop()!.replace(/\.tex$/, '.pdf')
         const cachedFiles = fileCache[project] ?? []
         if (cachedFiles.some(f => f.type === 'file' && f.path === pdfName)) {
-          setPdfUrl(api.getRawFileUrl(project, pdfName))
+          api.fetchRawFile(project, pdfName)
+            .then(blob => setPdfUrl(URL.createObjectURL(blob)))
+            .catch(() => { /* non-fatal */ })
         }
       }
     } catch (e) {

@@ -11,6 +11,14 @@ services:
     environment:
       - PROJECTS_DIR=/app/projects
       - PYTHONUNBUFFERED=1
+      - LLM_API_ENDPOINT=${LLM_API_ENDPOINT:-}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL_NAME=${LLM_MODEL_NAME:-}
+      - DEMO_MODE=${DEMO_MODE:-false}
+      - MULTI_USER_MODE=${MULTI_USER_MODE:-false}
+      - JWT_SECRET=${JWT_SECRET:-}
+      - DEMO_EMAIL=${DEMO_EMAIL:-}
+      - DEMO_PASSWORD=${DEMO_PASSWORD:-}
         #    ports:
         #      - "8000:8000"
     healthcheck:

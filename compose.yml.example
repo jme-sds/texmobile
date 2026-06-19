@@ -30,8 +30,22 @@ services:
     environment:
       - PROJECTS_DIR=/app/projects
       - PYTHONUNBUFFERED=1
-    # Optional: load variables from a .env file instead of listing them above.
-    # Copy .env.example to .env, adjust as needed, then uncomment:
+      # Pre-configure LLM credentials so visitors can't change them via the UI.
+      # For a demo deployment, set these in a .env file and uncomment env_file below.
+      - LLM_API_ENDPOINT=${LLM_API_ENDPOINT:-}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL_NAME=${LLM_MODEL_NAME:-}
+      # Set to "true" to lock the Settings UI for public-facing demos.
+      - DEMO_MODE=${DEMO_MODE:-false}
+      # Set to "true" to enable login screen and per-user project isolation.
+      - MULTI_USER_MODE=${MULTI_USER_MODE:-false}
+      # Required when MULTI_USER_MODE=true.  Generate with: openssl rand -hex 32
+      - JWT_SECRET=${JWT_SECRET:-}
+      # Optional demo account shown on the login screen (MULTI_USER_MODE=true only).
+      - DEMO_EMAIL=${DEMO_EMAIL:-}
+      - DEMO_PASSWORD=${DEMO_PASSWORD:-}
+    # Recommended: load secrets from a .env file instead of listing them above.
+    # Copy .env.example to .env, fill in LLM_API_KEY etc., then uncomment:
     # env_file: .env
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]

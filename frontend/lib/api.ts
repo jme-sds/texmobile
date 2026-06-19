@@ -2,11 +2,30 @@
 // See next.config.ts for the rewrite rule.
 
 import type { FileEntry, CompileError, ErrorSuggestion, DocumentComment } from './types'
+import { AuthStore } from './auth'
 
 const enc = encodeURIComponent
 
+function authHeaders(): Record<string, string> {
+  const token = AuthStore.getToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, init)
+  const headers: Record<string, string> = {
+    ...authHeaders(),
+    ...(init?.headers as Record<string, string> ?? {}),
+  }
+  const res = await fetch(path, { ...init, headers })
+
+  if (res.status === 401) {
+    AuthStore.clearToken()
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('texmobile:unauthorized'))
+    }
+    throw new Error('Session expired. Please log in again.')
+  }
+
   if (!res.ok) {
     let msg = `HTTP ${res.status}`
     try { const b = await res.json(); msg = b.detail ?? JSON.stringify(b) } catch { /* ignore */ }
@@ -14,6 +33,56 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   }
   return res.json() as Promise<T>
 }
+
+// ── Auth ─────────────────────────────────────────────────────────────────────
+
+export interface UserInfo {
+  id: string
+  email: string
+  is_demo: boolean
+}
+
+export interface InfoResponse {
+  projects_dir: string
+  latexmk: string
+  multi_user_mode: boolean
+}
+
+export interface DemoInfo {
+  available: boolean
+  demo_email?: string
+  demo_password?: string
+}
+
+export interface TokenResponse {
+  access_token: string
+  token_type: string
+  email: string
+  is_demo: boolean
+}
+
+export const getInfo = () =>
+  req<InfoResponse>('/api/info')
+
+export const getDemoInfo = () =>
+  req<DemoInfo>('/api/auth/demo-info')
+
+export const login = (email: string, password: string) =>
+  req<TokenResponse>('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  })
+
+export const register = (email: string, password: string) =>
+  req<TokenResponse>('/api/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  })
+
+export const getMe = () =>
+  req<UserInfo>('/api/auth/me')
 
 // ── Projects ────────────────────────────────────────────────────────────────
 
@@ -40,10 +109,23 @@ export const readFile = (project: string, filename: string) =>
     `/api/files/projects/${enc(project)}/files/${enc(filename)}`
   )
 
-// Returns a stable URL for serving a raw file (e.g. a PDF) directly in an iframe.
+// Returns a stable URL for serving a raw file (e.g. a PDF) directly.
 // Each path segment is encoded individually so subdirectory slashes are preserved.
 export const getRawFileUrl = (project: string, filepath: string) =>
   `/api/files/projects/${enc(project)}/raw/${filepath.split('/').map(enc).join('/')}`
+
+// Fetch a raw file as a Blob, with the auth token included.
+export async function fetchRawFile(project: string, filepath: string): Promise<Blob> {
+  const url = getRawFileUrl(project, filepath)
+  const res = await fetch(url, { headers: authHeaders() })
+  if (res.status === 401) {
+    AuthStore.clearToken()
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event('texmobile:unauthorized'))
+    throw new Error('Session expired')
+  }
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.blob()
+}
 
 export const createFile = (project: string, name: string, content = '') =>
   req<{ file: string }>(`/api/files/projects/${enc(project)}/files`, {
@@ -79,14 +161,22 @@ export function uploadFile(project: string, file: File, subpath = ''): Promise<v
   const form = new FormData()
   form.append('file', file)
   if (subpath) form.append('subpath', subpath)
-  return req<void>(`/api/files/projects/${enc(project)}/upload`, { method: 'POST', body: form })
+  return req<void>(`/api/files/projects/${enc(project)}/upload`, {
+    method: 'POST',
+    body: form,
+    headers: authHeaders(),
+  })
 }
 
 export async function uploadZip(file: File, overwrite = false): Promise<{ project: string; extracted: number }> {
   const form = new FormData()
   form.append('file', file)
   const url = `/api/files/projects/upload-zip${overwrite ? '?overwrite=true' : ''}`
-  return req<{ project: string; extracted: number }>(url, { method: 'POST', body: form })
+  return req<{ project: string; extracted: number }>(url, {
+    method: 'POST',
+    body: form,
+    headers: authHeaders(),
+  })
 }
 
 // ── Compilation ──────────────────────────────────────────────────────────────
@@ -98,9 +188,18 @@ export type CompileResult =
 export async function compile(project: string, filename: string, compiler = 'pdflatex'): Promise<CompileResult> {
   const res = await fetch('/api/compile', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders(),
+    },
     body: JSON.stringify({ project, filename, compiler }),
   })
+
+  if (res.status === 401) {
+    AuthStore.clearToken()
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event('texmobile:unauthorized'))
+    throw new Error('Session expired')
+  }
 
   if (!res.ok) {
     let msg = `HTTP ${res.status}`
@@ -123,6 +222,7 @@ export interface LlmConfig {
   api_key_set: boolean
   model_name: string
   default_compiler: string
+  demo_mode?: boolean
 }
 
 export const getLlmConfig = () =>

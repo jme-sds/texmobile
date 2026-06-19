@@ -3,6 +3,7 @@ import os
 import re
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -10,12 +11,19 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
-from ._utils import PROJECTS_DIR
+from ._utils import PROJECTS_DIR, get_user_projects_dir
+from ..auth import AuthUser, get_current_user
 
 router = APIRouter()
 
 CONFIG_PATH = PROJECTS_DIR / ".llm_config.json"
-CONFIG_SECRET = os.environ.get("CONFIG_SECRET", "")
+CONFIG_SECRET    = os.environ.get("CONFIG_SECRET", "")
+_DEMO_MODE_ENV   = os.environ.get("DEMO_MODE", "").lower() in ("1", "true", "yes")
+_MULTI_USER_MODE = os.environ.get("MULTI_USER_MODE", "false").lower() in ("1", "true", "yes")
+DEMO_MODE        = _DEMO_MODE_ENV or _MULTI_USER_MODE
+ENV_API_ENDPOINT = os.environ.get("LLM_API_ENDPOINT", "")
+ENV_API_KEY      = os.environ.get("LLM_API_KEY", "")
+ENV_MODEL_NAME   = os.environ.get("LLM_MODEL_NAME", "")
 
 _http_client = httpx.AsyncClient(timeout=60.0)
 
@@ -34,12 +42,19 @@ def _require_config_secret(
 # ── Config helpers ────────────────────────────────────────────────────────────
 
 def _read_config() -> dict:
+    cfg = {"api_endpoint": "", "api_key": "", "model_name": "", "default_compiler": "pdflatex"}
     if CONFIG_PATH.exists():
         try:
-            return json.loads(CONFIG_PATH.read_text())
+            cfg.update(json.loads(CONFIG_PATH.read_text()))
         except Exception:
             pass
-    return {"api_endpoint": "", "api_key": "", "model_name": "", "default_compiler": "pdflatex"}
+    if ENV_API_ENDPOINT:
+        cfg["api_endpoint"] = ENV_API_ENDPOINT
+    if ENV_API_KEY:
+        cfg["api_key"] = ENV_API_KEY
+    if ENV_MODEL_NAME:
+        cfg["model_name"] = ENV_MODEL_NAME
+    return cfg
 
 
 def _write_config(data: dict) -> None:
@@ -49,25 +64,25 @@ def _write_config(data: dict) -> None:
 
 # ── Conversation storage helpers ──────────────────────────────────────────────
 
-def _chats_dir(project: str) -> Path:
-    return PROJECTS_DIR / project / ".chats"
+def _chats_dir(user_dir: Path, project: str) -> Path:
+    return user_dir / project / ".chats"
 
 
-def _conv_path(project: str, conv_id: str) -> Path:
-    return _chats_dir(project) / f"{conv_id}.json"
+def _conv_path(user_dir: Path, project: str, conv_id: str) -> Path:
+    return _chats_dir(user_dir, project) / f"{conv_id}.json"
 
 
 # ── Comment storage helpers ───────────────────────────────────────────────────
 
-def _comments_path(project: str, filename: str) -> Path:
+def _comments_path(user_dir: Path, project: str, filename: str) -> Path:
     safe = filename.replace('/', '_').replace('..', '_')
-    d = PROJECTS_DIR / project / ".comments"
+    d = user_dir / project / ".comments"
     d.mkdir(parents=True, exist_ok=True)
     return d / f"{safe}.json"
 
 
-def _load_comments(project: str, filename: str) -> list[dict]:
-    p = _comments_path(project, filename)
+def _load_comments(user_dir: Path, project: str, filename: str) -> list[dict]:
+    p = _comments_path(user_dir, project, filename)
     if not p.exists():
         return []
     try:
@@ -76,12 +91,12 @@ def _load_comments(project: str, filename: str) -> list[dict]:
         return []
 
 
-def _save_comments(project: str, filename: str, comments: list[dict]) -> None:
-    _comments_path(project, filename).write_text(json.dumps(comments, indent=2))
+def _save_comments(user_dir: Path, project: str, filename: str, comments: list[dict]) -> None:
+    _comments_path(user_dir, project, filename).write_text(json.dumps(comments, indent=2))
 
 
-def _list_conversations(project: str) -> list[dict]:
-    d = _chats_dir(project)
+def _list_conversations(user_dir: Path, project: str) -> list[dict]:
+    d = _chats_dir(user_dir, project)
     if not d.exists():
         return []
     convs = []
@@ -100,15 +115,16 @@ def _list_conversations(project: str) -> list[dict]:
 
 
 def _save_conversation(
+    user_dir: Path,
     project: str,
     conv_id: str,
     title: str,
     messages: list[dict],
     created_at: str,
 ) -> None:
-    d = _chats_dir(project)
+    d = _chats_dir(user_dir, project)
     d.mkdir(parents=True, exist_ok=True)
-    _conv_path(project, conv_id).write_text(json.dumps({
+    _conv_path(user_dir, project, conv_id).write_text(json.dumps({
         "id": conv_id,
         "project": project,
         "title": title,
@@ -167,6 +183,7 @@ class ConfigOut(BaseModel):
     api_key_set: bool
     model_name: str
     default_compiler: str
+    demo_mode: bool = False
 
 
 class ConfigIn(BaseModel):
@@ -184,11 +201,14 @@ async def get_config():
         api_key_set=bool(cfg.get("api_key", "")),
         model_name=cfg.get("model_name", ""),
         default_compiler=cfg.get("default_compiler", "pdflatex"),
+        demo_mode=DEMO_MODE,
     )
 
 
 @router.post("/config")
 async def save_config(body: ConfigIn, _: None = Depends(_require_config_secret)):
+    if DEMO_MODE:
+        raise HTTPException(status_code=403, detail="Settings are locked in demo mode.")
     cfg = _read_config()
     if body.api_endpoint is not None:
         cfg["api_endpoint"] = body.api_endpoint
@@ -205,21 +225,24 @@ async def save_config(body: ConfigIn, _: None = Depends(_require_config_secret))
 # ── Conversation endpoints ────────────────────────────────────────────────────
 
 @router.get("/conversations/{project}")
-async def list_conversations(project: str):
-    return _list_conversations(project)
+async def list_conversations(project: str, current_user: AuthUser = Depends(get_current_user)):
+    user_dir = get_user_projects_dir(current_user.id)
+    return _list_conversations(user_dir, project)
 
 
 @router.get("/conversations/{project}/{conv_id}")
-async def get_conversation(project: str, conv_id: str):
-    path = _conv_path(project, conv_id)
+async def get_conversation(project: str, conv_id: str, current_user: AuthUser = Depends(get_current_user)):
+    user_dir = get_user_projects_dir(current_user.id)
+    path = _conv_path(user_dir, project, conv_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Conversation not found")
     return json.loads(path.read_text())
 
 
 @router.delete("/conversations/{project}/{conv_id}")
-async def delete_conversation(project: str, conv_id: str):
-    path = _conv_path(project, conv_id)
+async def delete_conversation(project: str, conv_id: str, current_user: AuthUser = Depends(get_current_user)):
+    user_dir = get_user_projects_dir(current_user.id)
+    path = _conv_path(user_dir, project, conv_id)
     if path.exists():
         path.unlink()
     return {"ok": True}
@@ -242,7 +265,7 @@ class ChatRequest(BaseModel):
 
 
 @router.post("/send")
-async def chat(body: ChatRequest):
+async def chat(body: ChatRequest, current_user: AuthUser = Depends(get_current_user)):
     api_endpoint, api_key, model_name = _get_validated_config()
 
     llm_messages = []
@@ -259,13 +282,13 @@ async def chat(body: ChatRequest):
 
     content = await _call_llm(api_endpoint, api_key, model_name, llm_messages)
 
-    # Persist conversation when a project is provided.
     if body.project and body.conversation_id:
+        user_dir = get_user_projects_dir(current_user.id)
         all_messages = [{"role": m.role, "content": m.content} for m in body.messages]
         all_messages.append({"role": "assistant", "content": content})
         title = body.conversation_title or _generate_title(body.messages)
         created_at = body.conversation_created_at or datetime.now(timezone.utc).isoformat()
-        _save_conversation(body.project, body.conversation_id, title, all_messages, created_at)
+        _save_conversation(user_dir, body.project, body.conversation_id, title, all_messages, created_at)
 
     return {"content": content}
 
@@ -529,12 +552,13 @@ Rules:
 
 
 @router.get("/comments/{project}/{filename}")
-async def list_comments(project: str, filename: str):
-    return _load_comments(project, filename)
+async def list_comments(project: str, filename: str, current_user: AuthUser = Depends(get_current_user)):
+    user_dir = get_user_projects_dir(current_user.id)
+    return _load_comments(user_dir, project, filename)
 
 
 @router.post("/comment-assist", response_model=CommentAssistResponse)
-async def comment_assist(body: CommentAssistRequest):
+async def comment_assist(body: CommentAssistRequest, current_user: AuthUser = Depends(get_current_user)):
     api_endpoint, api_key, model_name = _get_validated_config()
     user_content = (
         f"Instruction: {body.instruction}\n\n"
@@ -567,27 +591,30 @@ async def comment_assist(body: CommentAssistRequest):
         )
         clean.append(c)
     if body.project and body.filename:
-        existing = _load_comments(body.project, body.filename)
+        user_dir = get_user_projects_dir(current_user.id)
+        existing = _load_comments(user_dir, body.project, body.filename)
         new_texts = {c.anchored_text for c in clean}
         existing = [e for e in existing if e.get("anchored_text") not in new_texts]
         existing.extend([c.model_dump() for c in clean])
-        _save_comments(body.project, body.filename, existing)
+        _save_comments(user_dir, body.project, body.filename, existing)
     return CommentAssistResponse(comments=clean)
 
 
 @router.patch("/comments/{project}/{filename}/{comment_id}")
-async def update_comment(project: str, filename: str, comment_id: str, body: UpdateCommentRequest):
-    comments = _load_comments(project, filename)
+async def update_comment(project: str, filename: str, comment_id: str, body: UpdateCommentRequest, current_user: AuthUser = Depends(get_current_user)):
+    user_dir = get_user_projects_dir(current_user.id)
+    comments = _load_comments(user_dir, project, filename)
     for c in comments:
         if c["id"] == comment_id:
             c["status"] = body.status
             break
-    _save_comments(project, filename, comments)
+    _save_comments(user_dir, project, filename, comments)
     return {"ok": True}
 
 
 @router.delete("/comments/{project}/{filename}/{comment_id}")
-async def delete_comment_endpoint(project: str, filename: str, comment_id: str):
-    comments = [c for c in _load_comments(project, filename) if c["id"] != comment_id]
-    _save_comments(project, filename, comments)
+async def delete_comment_endpoint(project: str, filename: str, comment_id: str, current_user: AuthUser = Depends(get_current_user)):
+    user_dir = get_user_projects_dir(current_user.id)
+    comments = [c for c in _load_comments(user_dir, project, filename) if c["id"] != comment_id]
+    _save_comments(user_dir, project, filename, comments)
     return {"ok": True}
